@@ -3,8 +3,11 @@
 
 module Lambda (
   Lambda(..),
-  eval
+  eval, eval_normal, eval_by_name
 ) where
+
+import Data.List
+import Debug.Trace
 
 data Lambda =
     Var String
@@ -35,11 +38,19 @@ rename old new l  = rn_bound old new l []
           App (rn_bound old new expr1 bound) (rn_bound old new expr2 bound)
 
 
+-- get a list of variables for an expr
+get_vars :: Lambda -> [String]
+get_vars expr = nub $ collect_vars expr
+  where collect_vars (Var var)         = [var]
+        collect_vars (Abs var body)    = [var] ++ (collect_vars body)
+        collect_vars (App expr1 expr2) = (collect_vars expr1) ++ (collect_vars expr2)
+
 -- get a list of bound variables for an expr
 bound_vars :: Lambda -> [String]
-bound_vars (Var _) = []
-bound_vars (Abs var body) = var:(bound_vars body)
-bound_vars (App expr1 expr2) = (bound_vars expr1) ++ (bound_vars expr2)
+bound_vars expr = nub $ collect_vars expr
+  where collect_vars (Var _)           = []
+        collect_vars (Abs var body)    = var:(collect_vars body)
+        collect_vars (App expr1 expr2) = (collect_vars expr1) ++ (collect_vars expr2)
 
 -- helper for alpha renaming: generate a fresh variable
 -- name that is not bound
@@ -67,17 +78,72 @@ apply arg param (Abs var expr) =
 apply arg param (App expr1 expr2) =
   App (apply arg param expr1) (apply arg param expr2)
 
+-- check if an expression has a beta-redex
+-- this is a helper function for evaluation
+has_redex :: Lambda -> Bool
+has_redex (Var _) = False
+has_redex (Abs _ body) = has_redex body
+-- this is a redex!
+has_redex (App (Abs _ _) _) = True
+has_redex (App expr1 expr2) = (has_redex expr1) || (has_redex expr2)
+
+-- beta-reduce a redex
+-- this doesn't do anything if the arg is not a redex!
+reduce :: Lambda -> Lambda
+reduce expr@(App (Abs param body) arg) = if expr == next then expr else next
+  where renamed_body = rename_vars (get_vars arg) body
+        next         = apply arg param renamed_body
+reduce expr = expr
+
 -- reduce a lambda expression
-eval :: Lambda -> Lambda
--- redex exists!
-eval orig@(App (Abs param body) arg) =
-  -- if new expr is the same as the old, there is no more to eval
-  -- if this check does not exist, exprs like (\y.y) (\y.y) won't terminate
-  -- do alpha renaming before substitution to prevent variable name conflict
-  if orig == next then orig else next
-  where renamed_arg = rename_vars (bound_vars body) arg
-        next        = apply renamed_arg param body
--- not a redex; nothing else to evaluate
-eval l = l
+-- using normal order strategy
+eval_normal :: Lambda -> Lambda
+eval_normal expr@(Var _) = expr
+eval_normal expr@(Abs var body) = Abs var (eval_normal body)
+-- a redex!
+eval_normal expr@(App (Abs _ _) _) =
+  let next = reduce expr in
+  if has_redex next then
+    eval_normal next
+  else
+    next
+-- eval the outermost and leftmost redex first
+-- this means to eval expr1 first, then expr2
+eval_normal expr@(App expr1 expr2) =
+  if has_redex expr1 then
+    eval_normal (App (eval_normal expr1) expr2)
+  else
+    if has_redex expr2 then
+      eval_normal (App expr1 (eval_normal expr2))
+    -- no redexes; stop eval
+    else
+      expr
 
+-- reduce a lambda expression
+-- using call-by-name (lazy) strategy
+-- this is almost the same as normal order,
+-- except redexes inside abstractions aren't reduced
+eval_by_name :: Lambda -> Lambda
+eval_by_name expr@(Var _) = expr
+-- don't eval redexes inside abstractions!
+eval_by_name expr@(Abs _ _) = expr
+-- a redex!
+eval_by_name expr@(App (Abs _ _) _) =
+  let next = reduce expr in
+  if has_redex next then
+    eval_by_name next
+  else
+    next
+-- eval the outermost and leftmost redex first
+-- this means to eval expr1 first, then expr2
+eval_by_name expr@(App expr1 expr2) =
+  if has_redex expr1 then
+    eval_by_name (App (eval_by_name expr1) expr2)
+  else
+    if has_redex expr2 then
+      eval_by_name (App expr1 (eval_by_name expr2))
+    -- no redexes; stop eval
+    else
+      expr
 
+eval = eval_by_name
