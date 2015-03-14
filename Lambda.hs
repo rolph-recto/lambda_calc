@@ -3,7 +3,7 @@
 
 module Lambda (
   Lambda(..),
-  eval, eval_normal, eval_by_name
+  eval, eval_normal, eval_by_name, eval_by_value
 ) where
 
 import Data.List
@@ -146,4 +146,29 @@ eval_by_name expr@(App expr1 expr2) =
     else
       expr
 
-eval = eval_by_name
+-- reduce a lambda expression
+-- using call-by-value (strict) strategy
+eval_by_value :: Lambda -> Lambda
+eval_by_value expr@(Var _) = expr
+-- don't eval redexes inside abstractions!
+eval_by_value expr@(Abs _ _) = expr
+-- a redex!
+eval_by_value expr@(App (Abs _ _) _) =
+  let next = reduce expr in
+  if has_redex next then
+    eval_by_value next
+  else
+    next
+-- eval the outermost and leftmost redex first
+-- this means to eval expr1 first, then expr2
+eval_by_value expr@(App expr1 expr2) =
+  if has_redex expr2 then
+    eval_by_value (App expr1 (eval_by_value expr2))
+  else
+    if has_redex expr1 then
+      eval_by_value (App (eval_by_value expr1) expr2)
+    -- no redexes; stop eval
+    else
+      expr
+
+eval = eval_normal
